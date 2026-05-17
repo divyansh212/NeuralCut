@@ -1,0 +1,31 @@
+# env
+.env
+.env.local
+*.env.local
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.ruff_cache/
+
+# node
+node_modules/
+.next/
+out/
+.npm/
+
+# build / runtime
+dist/
+build/
+*.log
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# local renders
+/tmp/veedra/
