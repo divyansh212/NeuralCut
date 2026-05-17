@@ -1,4 +1,4 @@
-# Veedra
+# NEURALCUT
 
 AI-powered video creation studio. Conversational interface that turns a prompt into a finished short video by orchestrating script generation, image/visual generation, voiceover, and composition through a multi-agent pipeline.
 
