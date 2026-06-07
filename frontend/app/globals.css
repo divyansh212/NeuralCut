@@ -2,32 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
-}
-
 html, body {
-  background: #07070a;
-  color: #e6e6ed;
-  -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1200px 600px at 50% -10%, #14110b 0%, #050507 55%);
+  color: #cfd2d8;
+  font-family: Georgia, "Times New Roman", serif;
+  min-height: 100vh;
 }
 
-/* Subtle radial gradient background for landing & studio */
-.bg-veedra-aura {
-  background:
-    radial-gradient(60% 50% at 30% 20%, rgba(106, 59, 255, 0.18), transparent 70%),
-    radial-gradient(40% 35% at 80% 70%, rgba(255, 88, 200, 0.10), transparent 70%),
-    #07070a;
-}
-
-.bg-grid {
-  background-image:
-    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
-  background-size: 32px 32px;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: #22222c; border-radius: 6px; }
-::-webkit-scrollbar-thumb:hover { background: #2e2e3a; }
+textarea:focus, button:focus, input:focus { outline: 1px solid rgba(216, 184, 134, 0.4); }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #222; border-radius: 8px; }

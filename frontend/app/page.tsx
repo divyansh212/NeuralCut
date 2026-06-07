@@ -1,144 +1,64 @@
-import Link from 'next/link';
-import { ArrowRight, Sparkles, Wand2, Mic, Film, Eye, Zap } from 'lucide-react';
+import Link from "next/link";
+import { Logo, Wordmark } from "@/lib/Logo";
 
-export default function LandingPage() {
+const STAGES = [
+  { label: "Script Agent", sub: "decompose prompt into scenes" },
+  { label: "Visual Agent", sub: "render frames per scene · parallel" },
+  { label: "Voice Agent", sub: "synthesize narration · parallel" },
+  { label: "Compositor", sub: "ffmpeg-style assembly" },
+];
+
+export default function Landing() {
   return (
-    <main className="bg-veedra-aura min-h-screen">
-      {/* ─── Nav ─────────────────────────────────────────────────── */}
-      <nav className="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
-        <Link href="/" className="flex items-center gap-2 text-xl font-semibold">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-veedra-400 to-veedra-700 shadow-glow">
-            <Sparkles className="h-4 w-4 text-white" />
-          </span>
-          Veedra
+    <div>
+      <header className="flex justify-between items-center px-7 py-4 border-b border-line sticky top-0 bg-ink/80 backdrop-blur z-10">
+        <div className="flex items-center gap-3">
+          <Logo />
+          <Wordmark />
+        </div>
+        <Link href="/login" className="border border-gold/40 text-gold rounded-md px-4 py-[7px] text-[13px] tracking-wide">
+          Sign in
         </Link>
-        <div className="flex items-center gap-3 text-sm">
-          <Link href="/login" className="text-neutral-300 hover:text-white">
+      </header>
+
+      <main className="max-w-3xl mx-auto px-7 pt-16 pb-24">
+        <div className="animate-rise text-gold-dim tracking-[5px] text-[11px] font-mono">
+          MULTI-AGENT · TEXT → VIDEO
+        </div>
+        <h1 className="animate-rise text-5xl leading-[1.08] font-bold tracking-tight mt-4 mb-5" style={{ animationDelay: "80ms" }}>
+          Type a prompt.<br />
+          <span className="text-gold">Watch the director think.</span>
+        </h1>
+        <p className="animate-rise text-[#9b9ea8] text-[17px] leading-relaxed max-w-xl mb-8" style={{ animationDelay: "160ms" }}>
+          A script agent decomposes your idea into scenes. Visual and voice agents run in
+          parallel. An ffmpeg compositor assembles the cut. You watch every stage stream live
+          over Redis pub/sub.
+        </p>
+        <div className="animate-rise flex gap-3 flex-wrap" style={{ animationDelay: "240ms" }}>
+          <Link href="/studio" className="rounded-lg px-6 py-3 text-[15px] font-bold tracking-wide text-ink"
+            style={{ background: "linear-gradient(135deg,#f0dcb0,#8a7150)" }}>
+            Enter the Studio →
+          </Link>
+          <Link href="/login" className="rounded-lg px-6 py-3 text-[15px] border border-line text-silver">
             Sign in
           </Link>
-          <Link
-            href="/signup"
-            className="rounded-full bg-white px-4 py-1.5 font-medium text-ink-950 hover:bg-neutral-100"
-          >
-            Get started
-          </Link>
         </div>
-      </nav>
 
-      {/* ─── Hero ────────────────────────────────────────────────── */}
-      <section className="mx-auto max-w-6xl px-6 pt-16 pb-24 text-center">
-        <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-neutral-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-veedra-400" />
-          AI directors, voices, and editors. One conversation.
-        </div>
-        <h1 className="mt-6 text-balance text-5xl font-semibold leading-[1.05] sm:text-7xl">
-          Describe it. <br />
-          <span className="bg-gradient-to-br from-veedra-200 via-veedra-400 to-veedra-600 bg-clip-text text-transparent">
-            Veedra films it.
-          </span>
-        </h1>
-        <p className="mx-auto mt-6 max-w-2xl text-pretty text-lg text-neutral-300">
-          A conversational video studio that turns prompts into finished shorts —
-          script, visuals, voiceover, and edit, all directed by a chat with an AI agent.
-        </p>
-        <div className="mt-10 flex items-center justify-center gap-3">
-          <Link
-            href="/studio"
-            className="group inline-flex items-center gap-2 rounded-full bg-veedra-500 px-6 py-3 text-sm font-semibold text-white shadow-glow hover:bg-veedra-400"
-          >
-            Open the studio
-            <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
-          </Link>
-          <a
-            href="#how"
-            className="rounded-full border border-white/10 bg-white/5 px-6 py-3 text-sm font-semibold text-neutral-200 hover:bg-white/10"
-          >
-            How it works
-          </a>
-        </div>
-      </section>
-
-      {/* ─── Demo strip ──────────────────────────────────────────── */}
-      <section className="mx-auto max-w-6xl px-6">
-        <div className="overflow-hidden rounded-3xl border border-white/10 bg-ink-900/60 p-2 shadow-glow">
-          <div className="rounded-2xl bg-grid p-10">
-            <div className="rounded-xl border border-white/10 bg-ink-800/80 p-6 text-left text-sm">
-              <div className="text-veedra-200/80">you</div>
-              <div className="mt-1">
-                make a 30-second explainer about how solar panels work, friendly tone, vertical
+        <div className="animate-rise mt-14" style={{ animationDelay: "320ms" }}>
+          <div className="text-gold-dim tracking-[4px] text-[11px] font-mono mb-4">THE PIPELINE</div>
+          <div className="flex items-stretch gap-2 flex-wrap">
+            {STAGES.map((s, i) => (
+              <div key={s.label} className="flex items-stretch gap-2">
+                <div className="flex-1 min-w-[150px] border border-line rounded-xl px-4 py-3.5 bg-panel">
+                  <div className="text-silver font-semibold text-sm">{s.label}</div>
+                  <div className="text-[#6b6e78] text-[11.5px] mt-1">{s.sub}</div>
+                </div>
+                {i < STAGES.length - 1 && <div className="text-gold-dim self-center text-lg">→</div>}
               </div>
-              <div className="mt-4 text-veedra-200/80">veedra</div>
-              <div className="mt-1 text-neutral-300">
-                Drafting 4 scenes... generating visuals... synthesizing voice... composing.
-              </div>
-              <div className="mt-4 grid grid-cols-4 gap-3">
-                {[1, 2, 3, 4].map(i => (
-                  <div
-                    key={i}
-                    className="aspect-[9/16] rounded-lg bg-gradient-to-br from-veedra-700/40 to-veedra-900/40 ring-1 ring-white/5"
-                  />
-                ))}
-              </div>
-            </div>
+            ))}
           </div>
         </div>
-      </section>
-
-      {/* ─── Features ────────────────────────────────────────────── */}
-      <section id="how" className="mx-auto mt-32 max-w-6xl px-6">
-        <h2 className="text-center text-3xl font-semibold sm:text-4xl">
-          A studio that thinks alongside you
-        </h2>
-        <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map(f => (
-            <div
-              key={f.title}
-              className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 transition hover:bg-white/[0.05]"
-            >
-              <f.icon className="h-6 w-6 text-veedra-300" />
-              <div className="mt-4 text-base font-semibold">{f.title}</div>
-              <div className="mt-1 text-sm text-neutral-400">{f.body}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <footer className="mx-auto mt-32 max-w-6xl px-6 py-12 text-xs text-neutral-500">
-        © {new Date().getFullYear()} Veedra · Conversational video for everyone.
-      </footer>
-    </main>
+      </main>
+    </div>
   );
 }
-
-const FEATURES = [
-  {
-    icon: Wand2,
-    title: 'Prompt → finished video',
-    body: 'One sentence in, an edited short out. The agent decomposes, drafts, and renders.',
-  },
-  {
-    icon: Film,
-    title: 'Scene-by-scene editing',
-    body: 'Swap any visual, rewrite any line, change voice. Re-render only what changed.',
-  },
-  {
-    icon: Mic,
-    title: 'Real voices, multi-language',
-    body: 'ElevenLabs voices out of the box. Bring your own clone, mix narration and dialog.',
-  },
-  {
-    icon: Eye,
-    title: 'Video understanding',
-    body: 'Drop in a clip, ask questions, pull moments out by description. ViMax-style agent.',
-  },
-  {
-    icon: Sparkles,
-    title: 'Story templates',
-    body: 'Explainer, story, ad, recap — start from a template that already knows the beats.',
-  },
-  {
-    icon: Zap,
-    title: 'Streamed agent trace',
-    body: 'Watch the director think. Every step is visible and reproducible.',
-  },
-];

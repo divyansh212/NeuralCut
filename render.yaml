@@ -1,0 +1,55 @@
+# Render blueprint — provisions Redis, the API, and the worker.
+# Set the secret env vars (Supabase keys) in the Render dashboard after import.
+services:
+  - type: redis
+    name: neuralcut-redis
+    plan: free
+    ipAllowList: []
+
+  - type: web
+    name: neuralcut-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PROVIDER_MODE
+        value: mock
+      - key: REDIS_URL
+        fromService: { type: redis, name: neuralcut-redis, property: connectionString }
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: STORAGE_BUCKET
+        value: renders
+
+  - type: worker
+    name: neuralcut-worker
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    startCommand: celery -A app.worker.celery_app worker --loglevel=info
+    envVars:
+      - key: PROVIDER_MODE
+        value: mock
+      - key: REDIS_URL
+        fromService: { type: redis, name: neuralcut-redis, property: connectionString }
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: STORAGE_BUCKET
+        value: renders

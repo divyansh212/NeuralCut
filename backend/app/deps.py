@@ -1,41 +1,39 @@
-"""FastAPI dependencies. Pulls the Supabase user from the bearer token."""
+"""Authentication — real Supabase JWT verification, NO bypass.
 
-from __future__ import annotations
-from typing import Optional
-from uuid import UUID
+The cardinal rule from the skill: there is no dev mode that accepts arbitrary
+identities. Every protected request carries a Supabase-issued JWT and we verify
+its signature. Mocking *generation* is fine; mocking *identity* is never fine,
+because that shortcut becomes a public backdoor the instant the service is
+reachable. If the JWT secret is missing we fail loudly at startup (config check)
+rather than silently running insecure.
+"""
 
-from fastapi import Header, HTTPException, status
+import jwt
+from fastapi import HTTPException, Header
 
-from app.services.supabase import admin_client
-
-
-class CurrentUser:
-    def __init__(self, id: UUID, email: str, access_token: str):
-        self.id = id
-        self.email = email
-        self.access_token = access_token
+from .config import settings
 
 
-async def get_current_user(
-    authorization: Optional[str] = Header(default=None),
-) -> CurrentUser:
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
+def get_current_user(authorization: str = Header(None)) -> dict:
+    if not settings.SUPABASE_JWT_SECRET:
+        # Misconfiguration: refuse rather than fall back to an insecure mode.
+        raise HTTPException(500, "Server auth not configured (SUPABASE_JWT_SECRET missing)")
+
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Missing bearer token")
+
     token = authorization.split(" ", 1)[1]
+    try:
+        payload = jwt.decode(
+            token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated",
+        )
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Invalid or expired token")
 
-    sb = admin_client()
-    if sb is None:
-        # Local dev without Supabase: trust the token as a uuid prefix.
-        # Replace with proper JWT verification when you wire up hosted Supabase.
-        try:
-            uid = UUID(token[:36])
-        except Exception:
-            raise HTTPException(401, "Local dev: token must be a uuid")
-        return CurrentUser(id=uid, email=f"{uid}@local.dev", access_token=token)
-
-    # Hosted Supabase: verify by calling auth.getUser
-    res = sb.auth.get_user(token)
-    user = getattr(res, "user", None)
-    if not user:
-        raise HTTPException(401, "Invalid token")
-    return CurrentUser(id=UUID(user.id), email=user.email or "", access_token=token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(401, "Token missing subject")
+    return {"id": user_id, "email": payload.get("email")}

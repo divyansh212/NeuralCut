@@ -1,55 +1,30 @@
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: postgres
-    ports: ["54322:5432"]
-    volumes:
-      - db_data:/var/lib/postgresql/data
-      - ./supabase/migrations:/docker-entrypoint-initdb.d:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
 
-  backend:
+  api:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     env_file: .env
-    environment:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@db:5432/postgres
-      REDIS_URL: redis://redis:6379/0
     ports: ["8000:8000"]
-    volumes:
-      - ./backend:/app
-      - render_tmp:/tmp/veedra
-    depends_on:
-      db: { condition: service_healthy }
-      redis: { condition: service_healthy }
+    depends_on: [redis]
 
   worker:
     build: ./backend
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.worker.celery_app worker --loglevel=info
     env_file: .env
-    environment:
-      SUPABASE_DB_URL: postgresql://postgres:postgres@db:5432/postgres
-      REDIS_URL: redis://redis:6379/0
-    volumes:
-      - ./backend:/app
-      - render_tmp:/tmp/veedra
-    depends_on:
-      redis: { condition: service_healthy }
-      db: { condition: service_healthy }
+    depends_on: [redis]
 
-volumes:
-  db_data:
-  render_tmp:
+  # Optional internal ops console (Streamlit). Browse to http://localhost:8501
+  ops:
+    build: ./backend
+    command: streamlit run streamlit/dashboard.py --server.port 8501 --server.address 0.0.0.0
+    environment:
+      - NEURALCUT_API_URL=http://api:8000
+    env_file: .env
+    ports: ["8501:8501"]
+    depends_on: [api]
+
+# Frontend runs outside compose during dev (cd frontend && npm run dev) for snappy
+# hot-reload. Add it here later for a one-command full stack if you want.

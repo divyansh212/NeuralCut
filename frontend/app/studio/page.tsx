@@ -1,294 +1,191 @@
-'use client';
+"use client";
 
-import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
-import {
-  Sparkles, Send, Loader2, Film, Mic, Wand2, CheckCircle2, XCircle,
-} from 'lucide-react';
-import { apiPost, apiSSE, apiGet } from '@/lib/api';
-import { createClient } from '@/lib/supabase/client';
-import { cn } from '@/lib/utils';
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { supabase } from "@/lib/supabase";
+import { Logo, Wordmark } from "@/lib/Logo";
 
-type ChatItem =
-  | { kind: 'user'; text: string }
-  | { kind: 'agent'; step: string; role: string; content: any };
+const API = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
-type Scene = {
-  idx: number;
-  narration: string;
-  visual_prompt: string;
-  visual_url?: string;
-  voice_url?: string;
-  duration_s: number;
-};
+const STAGES = [
+  { key: "script", label: "Script Agent", sub: "decompose prompt into scenes" },
+  { key: "visuals", label: "Visual Agent", sub: "render frames per scene · parallel" },
+  { key: "voice", label: "Voice Agent", sub: "synthesize narration · parallel" },
+  { key: "compose", label: "Compositor", sub: "ffmpeg assembly" },
+];
 
-export default function StudioPage() {
-  const router = useRouter();
-  const [prompt, setPrompt] = useState('');
-  const [aspect, setAspect] = useState<'16:9' | '9:16' | '1:1'>('9:16');
-  const [tone, setTone] = useState('friendly explainer');
-  const [scenes, setScenes] = useState<Scene[]>([]);
-  const [chat, setChat] = useState<ChatItem[]>([]);
-  const [running, setRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [finalUrl, setFinalUrl] = useState<string>();
-  const [error, setError] = useState<string>();
-  const scrollRef = useRef<HTMLDivElement>(null);
+type Evt = { stage: string; status: string; detail?: any };
+
+export default function Studio() {
+  const [prompt, setPrompt] = useState("a lighthouse waking up at dawn over a stormy sea");
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [status, setStatus] = useState<string>("idle");
+  const [events, setEvents] = useState<Evt[]>([]);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [authed, setAuthed] = useState<boolean | null>(null);
+  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    (async () => {
-      const supabase = createClient();
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) router.replace('/login');
-    })();
-  }, [router]);
+    supabase.auth.getSession().then(({ data }) => setAuthed(!!data.session));
+  }, []);
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [events]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: 'smooth',
+  const stageState = (key: string): "idle" | "start" | "done" => {
+    let s: "idle" | "start" | "done" = "idle";
+    for (const e of events) {
+      if (e.stage === key && e.status === "start") s = "start";
+      if (e.stage === key && e.status === "done") s = "done";
+    }
+    return s;
+  };
+
+  async function generate() {
+    setEvents([]); setVideoUrl(null); setStatus("queued");
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) { setStatus("idle"); setAuthed(false); return; }
+
+    const res = await fetch(`${API}/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ prompt }),
     });
-  }, [chat.length]);
+    if (!res.ok) { setStatus("failed"); return; }
+    const { job_id } = await res.json();
+    setJobId(job_id);
+    setStatus("running");
 
-  async function start() {
-    if (!prompt.trim() || running) return;
-    setRunning(true);
-    setError(undefined);
-    setFinalUrl(undefined);
-    setScenes([]);
-    setProgress(2);
-    setChat(c => [...c, { kind: 'user', text: prompt }]);
-
-    try {
-      const { job_id, project_id } = await apiPost<{
-        job_id: string; project_id: string;
-      }>('/agent/run', { prompt, style: { aspect, tone, scenes: 4 } });
-
-      await apiSSE(`/agent/stream/${job_id}`, ({ event, data }) => {
-        if (event !== 'agent') return;
-        setChat(c => [...c, { kind: 'agent', ...data }]);
-
-        // bump progress based on step
-        const bump: Record<string, number> = {
-          script: 15, visual: 55, voice: 80, compose: 95, done: 100,
-        };
-        if (bump[data.step]) setProgress(p => Math.max(p, bump[data.step]));
-
-        if (data.step === 'script' && Array.isArray(data.content.scenes)) {
-          setScenes(data.content.scenes);
-        }
-        if (data.step === 'done') {
-          setFinalUrl(data.content.final_url);
-          // refresh scenes with URLs filled in
-          apiGet<Scene[]>(`/projects/${project_id}/scenes`).then(setScenes);
-        }
-        if (data.step === 'error') setError(data.content.error || 'failed');
-      });
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setRunning(false);
+    // fetch + ReadableStream SSE reader (token passed as query param, validated
+    // server-side; the stream endpoint also confirms job ownership).
+    const streamRes = await fetch(`${API}/jobs/${job_id}/stream?token=${encodeURIComponent(session.access_token)}`);
+    const reader = streamRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split("\n\n");
+      buf = parts.pop() || "";
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const evt: Evt = JSON.parse(line.slice(5).trim());
+        setEvents((prev) => [...prev, evt]);
+        if (evt.stage === "done") { setVideoUrl(evt.detail?.url); setStatus("done"); }
+        if (evt.status === "failed") setStatus("failed");
+      }
     }
   }
 
+  const busy = status === "queued" || status === "running";
+
   return (
-    <main className="grid min-h-screen grid-cols-1 bg-ink-950 lg:grid-cols-[420px_1fr]">
-      {/* ─── Left: chat / agent trace ──────────────────────────── */}
-      <aside className="flex h-screen flex-col border-r border-white/5 bg-ink-900/40">
-        <header className="flex items-center justify-between border-b border-white/5 px-5 py-4">
-          <Link href="/dashboard" className="flex items-center gap-2 text-sm font-semibold">
-            <span className="grid h-7 w-7 place-items-center rounded-md bg-gradient-to-br from-veedra-400 to-veedra-700">
-              <Sparkles className="h-3.5 w-3.5 text-white" />
-            </span>
-            Veedra Studio
-          </Link>
-          {running && (
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-veedra-500/15 px-2 py-0.5 text-xs text-veedra-200">
-              <Loader2 className="h-3 w-3 animate-spin" /> {progress}%
-            </span>
-          )}
-        </header>
+    <div>
+      <header className="flex justify-between items-center px-7 py-4 border-b border-line sticky top-0 bg-ink/80 backdrop-blur z-10">
+        <Link href="/" className="flex items-center gap-3"><Logo /><Wordmark /></Link>
+        <Link href="/dashboard" className="border border-line text-[#7e8290] rounded-md px-4 py-[7px] text-[13px]">Dashboard</Link>
+      </header>
 
-        <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-5">
-          {chat.length === 0 && (
-            <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-neutral-400">
-              Describe the video you want. The agent will draft a script, generate visuals
-              and voice, then compose the final cut. Each step streams here.
-            </div>
-          )}
-          {chat.map((m, i) => <ChatRow key={i} item={m} />)}
-          {error && (
-            <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
-              <XCircle className="h-4 w-4" /> {error}
-            </div>
-          )}
-        </div>
-
-        <div className="border-t border-white/5 p-4">
-          <div className="mb-2 flex gap-2 text-xs">
-            <Pill label="9:16" active={aspect === '9:16'} onClick={() => setAspect('9:16')} />
-            <Pill label="16:9" active={aspect === '16:9'} onClick={() => setAspect('16:9')} />
-            <Pill label="1:1" active={aspect === '1:1'} onClick={() => setAspect('1:1')} />
-            <input
-              value={tone}
-              onChange={e => setTone(e.target.value)}
-              placeholder="tone"
-              className="ml-auto w-32 rounded-full border border-white/10 bg-ink-800 px-3 py-1 text-xs outline-none focus:border-veedra-500/50"
-            />
+      {authed === false && (
+        <div className="max-w-5xl mx-auto px-5 pt-5">
+          <div className="border border-gold/40 rounded-lg p-4 bg-panel text-silver text-sm">
+            You need to <Link href="/login" className="text-gold underline">sign in</Link> — the API rejects unauthenticated requests (no auth bypass).
           </div>
-          <div className="flex gap-2">
-            <textarea
-              value={prompt}
-              onChange={e => setPrompt(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) start();
-              }}
-              placeholder="A 30-second explainer about how solar panels work, vertical, friendly tone..."
-              rows={3}
-              className="flex-1 resize-none rounded-xl border border-white/10 bg-ink-800/80 p-3 text-sm outline-none ring-veedra-500/40 focus:ring-2"
-            />
-            <button
-              onClick={start}
-              disabled={running || !prompt.trim()}
-              className="grid h-auto place-items-center rounded-xl bg-veedra-500 px-4 text-white shadow-glow transition hover:bg-veedra-400 disabled:opacity-50"
-            >
-              {running ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+        </div>
+      )}
+
+      <main className="grid gap-4 p-5" style={{ gridTemplateColumns: "minmax(300px,1fr) minmax(280px,0.9fr)" }}>
+        {/* LEFT: prompt + pipeline + result */}
+        <section className="flex flex-col gap-4">
+          <div className="bg-panel border border-line rounded-xl p-4">
+            <div className="text-gold-dim tracking-[3px] text-[10.5px] font-mono mb-3">PROMPT</div>
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} disabled={busy}
+              placeholder="Describe your video…"
+              className="w-full min-h-[96px] bg-ink border border-line rounded-lg p-3 text-sm text-silver resize-y" />
+            <button onClick={generate} disabled={busy}
+              className="w-full mt-3 rounded-lg py-3 font-bold text-ink disabled:opacity-60 disabled:cursor-not-allowed"
+              style={{ background: busy ? "#1a1a20" : "linear-gradient(135deg,#f0dcb0,#8a7150)", color: busy ? "#8a7150" : "#050507" }}>
+              {busy ? "Generating…" : "Generate Video"}
             </button>
-          </div>
-          <div className="mt-2 text-[10px] text-neutral-500">
-            ⌘/Ctrl + Enter to send
-          </div>
-        </div>
-      </aside>
-
-      {/* ─── Right: preview ────────────────────────────────────── */}
-      <section className="flex h-screen flex-col">
-        <header className="border-b border-white/5 px-6 py-4">
-          <div className="text-sm text-neutral-400">Preview</div>
-        </header>
-
-        <div className="flex-1 overflow-y-auto p-6">
-          {finalUrl ? (
-            <div className="mx-auto max-w-3xl">
-              <video
-                key={finalUrl}
-                controls
-                src={finalUrl}
-                className="aspect-video w-full rounded-2xl bg-black shadow-glow"
-              />
-              <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-300">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Rendered
+            {jobId && (
+              <div className="flex justify-between items-center mt-3">
+                <span className="font-mono text-xs text-[#7e8290]">{jobId.slice(0, 13)}</span>
+                <StatusPill status={status} />
               </div>
+            )}
+          </div>
+
+          <div className="bg-panel border border-line rounded-xl p-4">
+            <div className="text-gold-dim tracking-[3px] text-[10.5px] font-mono mb-3">PIPELINE</div>
+            <div className="flex flex-col gap-2.5">
+              {STAGES.map((st) => <StageBar key={st.key} label={st.label} sub={st.sub} state={stageState(st.key)} />)}
             </div>
-          ) : (
-            <div
-              className={cn(
-                'grid gap-4',
-                aspect === '9:16' && 'grid-cols-2 sm:grid-cols-4',
-                aspect === '16:9' && 'grid-cols-1 sm:grid-cols-2',
-                aspect === '1:1' && 'grid-cols-2 sm:grid-cols-3',
-              )}
-            >
-              {(scenes.length ? scenes : Array.from({ length: 4 }).map((_, i) => ({
-                idx: i, narration: '', visual_prompt: '', visual_url: undefined,
-                voice_url: undefined, duration_s: 4,
-              }))).map(sc => (
-                <ScenePreview key={sc.idx} scene={sc as Scene} aspect={aspect} />
+          </div>
+
+          {videoUrl && (
+            <div className="bg-panel border border-line rounded-xl p-4">
+              <div className="text-gold-dim tracking-[3px] text-[10.5px] font-mono mb-3">RENDER</div>
+              <video src={videoUrl} controls className="w-full rounded-lg border border-line" />
+              <div className="font-mono text-[11.5px] text-gold mt-2 break-all">{videoUrl}</div>
+            </div>
+          )}
+        </section>
+
+        {/* RIGHT: live event stream */}
+        <section>
+          <div className="bg-panel border border-line rounded-xl p-4 h-full flex flex-col">
+            <div className="text-gold-dim tracking-[3px] text-[10.5px] font-mono mb-3">
+              LIVE STREAM <span className="font-normal">· job:{jobId?.slice(0, 8) || "—"}</span>
+            </div>
+            <div ref={logRef} className="flex-1 min-h-[320px] max-h-[520px] overflow-y-auto bg-ink border border-line rounded-lg p-3 font-mono text-xs leading-7">
+              {events.length === 0 && <div className="text-[#4a4d56] italic">SUBSCRIBE job:&lt;id&gt; — awaiting events…</div>}
+              {events.map((e, i) => (
+                <div key={i} className="whitespace-pre-wrap break-words">
+                  <span className="text-gold-dim">›</span>{" "}
+                  <span className="text-gold">{e.stage}</span>
+                  <span className="text-silver"> — {e.status}</span>
+                  {e.detail && <span className="text-[#7e8290]"> {JSON.stringify(e.detail)}</span>}
+                </div>
               ))}
             </div>
-          )}
-        </div>
-      </section>
-    </main>
-  );
-}
-
-function Pill({
-  label, active, onClick,
-}: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        'rounded-full px-3 py-1 transition',
-        active
-          ? 'bg-veedra-500 text-white'
-          : 'border border-white/10 bg-ink-800 text-neutral-300 hover:bg-ink-700',
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-function ChatRow({ item }: { item: ChatItem }) {
-  if (item.kind === 'user') {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-veedra-500/20 px-4 py-2 text-sm text-veedra-50">
-          {item.text}
-        </div>
-      </div>
-    );
-  }
-  const Icon = ICONS[item.step] ?? Sparkles;
-  return (
-    <div className="flex gap-3">
-      <div className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-veedra-500/10 text-veedra-300">
-        <Icon className="h-3.5 w-3.5" />
-      </div>
-      <div className="flex-1 rounded-xl border border-white/5 bg-white/[0.03] p-3 text-xs">
-        <div className="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wider text-neutral-500">
-          {item.step} · {item.role}
-        </div>
-        <div className="text-neutral-200">{summarize(item)}</div>
-      </div>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }
 
-const ICONS: Record<string, any> = {
-  script: Wand2, visual: Film, voice: Mic, compose: Sparkles, done: CheckCircle2,
-  error: XCircle,
-};
-
-function summarize(item: Extract<ChatItem, { kind: 'agent' }>): string {
-  const c = item.content ?? {};
-  if (typeof c.message === 'string') return c.message;
-  if (item.step === 'visual' || item.step === 'voice') {
-    return `scene ${c.scene + 1} · ${c.status}`;
-  }
-  if (item.step === 'done') return `Render ready · ${c.scene_count} scenes`;
-  return JSON.stringify(c).slice(0, 220);
+function StatusPill({ status }: { status: string }) {
+  const map: Record<string, { c: string; t: string }> = {
+    idle: { c: "#7e8290", t: "IDLE" },
+    queued: { c: "#7e8290", t: "QUEUED" },
+    running: { c: "#d8b886", t: "RUNNING" },
+    done: { c: "#6fcf97", t: "DONE" },
+    failed: { c: "#eb5757", t: "FAILED" },
+  };
+  const m = map[status] || map.idle;
+  return (
+    <span className="inline-flex items-center gap-1.5 border rounded-full px-2.5 py-[3px] text-[10.5px] font-mono tracking-wide"
+      style={{ color: m.c, borderColor: m.c + "55" }}>
+      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: m.c }} />{m.t}
+    </span>
+  );
 }
 
-function ScenePreview({ scene, aspect }: { scene: Scene; aspect: string }) {
-  const ratio = aspect === '9:16' ? 'aspect-[9/16]' : aspect === '1:1' ? 'aspect-square' : 'aspect-video';
+function StageBar({ label, sub, state }: { label: string; sub: string; state: "idle" | "start" | "done" }) {
+  const active = state === "start", done = state === "done";
   return (
-    <div className="overflow-hidden rounded-xl border border-white/10 bg-ink-900">
-      <div className={cn('relative w-full bg-gradient-to-br from-veedra-700/20 to-veedra-900', ratio)}>
-        {scene.visual_url ? (
-          /* eslint-disable-next-line @next/next/no-img-element */
-          <img src={scene.visual_url} alt="" className="h-full w-full object-cover" />
-        ) : scene.visual_prompt ? (
-          <div className="absolute inset-0 grid place-items-center p-4 text-center text-xs text-veedra-200/70">
-            generating...
-          </div>
-        ) : (
-          <div className="absolute inset-0 grid place-items-center text-veedra-500/30">
-            <Film className="h-8 w-8" />
-          </div>
-        )}
-        <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px]">
-          {scene.idx + 1}
-        </span>
+    <div className="flex items-center gap-3 border rounded-lg px-3 py-2.5 transition-colors"
+      style={{ borderColor: active ? "#d8b88666" : done ? "#6fcf9755" : "#1c1c22" }}>
+      <span className={"w-2.5 h-2.5 rounded-full flex-shrink-0 " + (active ? "animate-pulse2" : "")}
+        style={{ background: done ? "#6fcf97" : active ? "#d8b886" : "#2a2a32", boxShadow: active ? "0 0 10px #d8b886" : "none" }} />
+      <div className="flex-1">
+        <div className="text-[13px] font-semibold" style={{ color: done || active ? "#cfd2d8" : "#5a5d68" }}>{label}</div>
+        <div className="text-[11px] text-[#5a5d68]">{sub}</div>
       </div>
-      {scene.narration && (
-        <div className="border-t border-white/5 p-3 text-[11px] leading-relaxed text-neutral-300">
-          {scene.narration}
-        </div>
-      )}
+      <span className="text-[10px] tracking-wide" style={{ color: done ? "#6fcf97" : active ? "#d8b886" : "#3a3d46" }}>
+        {done ? "DONE" : active ? "···" : "IDLE"}
+      </span>
     </div>
   );
 }

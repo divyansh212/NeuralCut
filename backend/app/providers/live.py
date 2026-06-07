@@ -1,157 +1,68 @@
-"""Live provider adapters. Used when PROVIDER_MODE=live.
+"""Live implementations. Switching to real generation is exactly: implement
+these three, set PROVIDER_MODE=live, supply keys. Nothing else changes.
 
-Each adapter has the same interface as its mock counterpart so the
-orchestrator code stays identical. Replace mock with live by changing
-one env var. To plug in another vendor: subclass the base and register
-it in factory.py.
+The image provider here is wired to a PyTorch (diffusers) Stable Diffusion
+pipeline so generation runs on your own GPU/CPU with no per-image API cost.
+Script -> an LLM (OpenAI). Voice -> a TTS API (ElevenLabs). Both left as
+clearly-marked TODOs with the request shape ready.
 """
 
-from __future__ import annotations
-import asyncio
 import os
-import json
-from typing import AsyncIterator
 
-import httpx
-import anthropic
-from openai import OpenAI
-
-from app.config import get_settings
-from app.providers.base import ScriptProvider, ImageProvider, TTSProvider, SceneSpec
+from .base import ScriptProvider, ImageProvider, VoiceProvider
 
 
-_SCRIPT_SYSTEM = """You are Veedra's script director. Given a user prompt and style hints,
-return a JSON object with key "scenes": an array of {idx, narration, visual_prompt, duration_s}.
-Constraints:
-- narration: <=22 words, spoken naturally
-- visual_prompt: vivid, specific, includes lighting + composition
-- duration_s: 3-6
-Output ONLY the JSON. No prose."""
+class ScriptLive(ScriptProvider):
+    def generate(self, prompt):
+        # TODO: call your LLM (e.g. OpenAI) and parse into
+        #   [{"scene": int, "narration": str, "visual_desc": str}, ...]
+        #
+        # from openai import OpenAI
+        # client = OpenAI(api_key=settings.OPENAI_API_KEY)
+        # resp = client.chat.completions.create(... ask for JSON scene list ...)
+        # return json.loads(resp.choices[0].message.content)["scenes"]
+        raise NotImplementedError("Implement ScriptLive.generate")
 
 
-class AnthropicScriptProvider(ScriptProvider):
-    def __init__(self) -> None:
-        s = get_settings()
-        self._client = anthropic.AsyncAnthropic(api_key=s.anthropic_api_key)
-        self._model = s.llm_model
+class ImageLive(ImageProvider):
+    """PyTorch / diffusers Stable Diffusion. The model is loaded lazily once and
+    cached on the instance so repeated scenes in a job reuse the warm pipeline.
+    Requires: torch, diffusers, transformers, accelerate (see pyproject extras).
+    """
 
-    async def generate_scenes(self, prompt: str, style: dict) -> list[SceneSpec]:
-        n = int(style.get("scenes") or 4)
-        user = (
-            f"User prompt: {prompt}\n"
-            f"Aspect: {style.get('aspect','16:9')}\n"
-            f"Tone: {style.get('tone','friendly explainer')}\n"
-            f"Number of scenes: {n}\n"
-            f"Visual style: {style.get('visual_style','cinematic')}\n"
-        )
-        msg = await self._client.messages.create(
-            model=self._model,
-            max_tokens=2048,
-            system=_SCRIPT_SYSTEM,
-            messages=[{"role": "user", "content": user}],
-        )
-        text = "".join(b.text for b in msg.content if b.type == "text")
-        data = json.loads(text)
-        scenes = data["scenes"][:n]
-        return [SceneSpec(**s) for s in scenes]
+    _pipe = None
 
-    async def stream_thoughts(self, prompt: str, style: dict) -> AsyncIterator[str]:
-        # Use Anthropic streaming to surface partial reasoning to the UI.
-        async with self._client.messages.stream(
-            model=self._model,
-            max_tokens=600,
-            system="Narrate, in 4-6 short lines, how you'd structure this video.",
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            async for text in stream.text_stream:
-                yield text
+    def _load(self):
+        if ImageLive._pipe is not None:
+            return ImageLive._pipe
+        import torch
+        from diffusers import StableDiffusionPipeline
 
+        model_id = os.getenv("SD_MODEL_ID", "runwayml/stable-diffusion-v1-5")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=dtype)
+        pipe = pipe.to(device)
+        if device == "cpu":
+            pipe.enable_attention_slicing()
+        ImageLive._pipe = pipe
+        return pipe
 
-class OpenAIScriptProvider(ScriptProvider):
-    def __init__(self) -> None:
-        s = get_settings()
-        self._client = OpenAI(api_key=s.openai_api_key)
-        self._model = "gpt-4o-mini"
-
-    async def generate_scenes(self, prompt: str, style: dict) -> list[SceneSpec]:
-        n = int(style.get("scenes") or 4)
-        # Run in threadpool — openai sdk is sync
-        def _call() -> str:
-            r = self._client.chat.completions.create(
-                model=self._model,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": _SCRIPT_SYSTEM},
-                    {"role": "user", "content":
-                        f"{prompt}\nstyle: {json.dumps(style)}\nscenes: {n}"},
-                ],
-            )
-            return r.choices[0].message.content or "{}"
-        text = await asyncio.to_thread(_call)
-        data = json.loads(text)
-        return [SceneSpec(**s) for s in data.get("scenes", [])[:n]]
-
-    async def stream_thoughts(self, prompt: str, style: dict) -> AsyncIterator[str]:
-        yield "Analyzing prompt..."
-        yield "Drafting scenes..."
-
-
-class ReplicateImageProvider(ImageProvider):
-    """Calls Replicate's flux-schnell by default. Swap model_ref to taste."""
-
-    MODEL_REF = "black-forest-labs/flux-schnell"
-
-    async def generate(self, prompt: str, aspect: str, out_path: str) -> str:
-        s = get_settings()
-        async with httpx.AsyncClient(timeout=120) as http:
-            create = await http.post(
-                "https://api.replicate.com/v1/predictions",
-                headers={"Authorization": f"Bearer {s.replicate_api_token}"},
-                json={
-                    "version": self.MODEL_REF,
-                    "input": {"prompt": prompt, "aspect_ratio": aspect},
-                },
-            )
-            create.raise_for_status()
-            pred = create.json()
-            url = pred["urls"]["get"]
-            for _ in range(60):
-                await asyncio.sleep(1.5)
-                poll = await http.get(
-                    url, headers={"Authorization": f"Bearer {s.replicate_api_token}"}
-                )
-                pred = poll.json()
-                if pred["status"] == "succeeded":
-                    img_url = pred["output"][0] if isinstance(pred["output"], list) \
-                        else pred["output"]
-                    img = await http.get(img_url)
-                    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-                    with open(out_path, "wb") as f:
-                        f.write(img.content)
-                    return out_path
-                if pred["status"] == "failed":
-                    raise RuntimeError(f"Replicate failed: {pred.get('error')}")
-            raise TimeoutError("Replicate timed out")
-
-
-class ElevenLabsTTSProvider(TTSProvider):
-    DEFAULT_VOICE = "EXAVITQu4vr4xnSDxMaL"  # Bella, public preset
-
-    async def synthesize(self, text: str, voice_id: str | None, out_path: str) -> str:
-        s = get_settings()
-        vid = voice_id or self.DEFAULT_VOICE
-        async with httpx.AsyncClient(timeout=60) as http:
-            r = await http.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{vid}",
-                headers={
-                    "xi-api-key": s.elevenlabs_api_key,
-                    "accept": "audio/mpeg",
-                    "content-type": "application/json",
-                },
-                json={"text": text, "model_id": "eleven_turbo_v2_5"},
-            )
-            r.raise_for_status()
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            with open(out_path, "wb") as f:
-                f.write(r.content)
+    def generate(self, visual_desc, out_path):
+        pipe = self._load()
+        steps = int(os.getenv("SD_STEPS", "25"))
+        image = pipe(visual_desc, num_inference_steps=steps, height=576, width=1024).images[0]
+        image = image.resize((1280, 720))
+        image.save(out_path)
         return out_path
+
+
+class VoiceLive(VoiceProvider):
+    def generate(self, narration, out_path):
+        # TODO: call your TTS API (e.g. ElevenLabs), write audio bytes to out_path.
+        #
+        # import requests
+        # r = requests.post(url, headers={"xi-api-key": settings.ELEVENLABS_API_KEY},
+        #                   json={"text": narration})
+        # with open(out_path, "wb") as f: f.write(r.content)
+        raise NotImplementedError("Implement VoiceLive.generate")
